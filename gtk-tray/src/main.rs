@@ -1,6 +1,7 @@
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::{IconLookupFlags, IconTheme, Image, Menu, MenuBar, MenuItem, SeparatorMenuItem};
+use gtk_layer_shell;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -139,12 +140,46 @@ fn main() {
 fn build_ui(application: &gtk::Application) {
     let window = gtk::ApplicationWindow::new(application);
     window.set_title("System menu bar");
-    window.set_border_width(10);
+    window.set_border_width(1);
     window.set_position(gtk::WindowPosition::Center);
-    window.set_default_size(350, 70);
+    window.set_default_size(500, 500);
+    window.connect_screen_changed(set_visual);
+    window.connect_draw(draw);
+
+    gtk_layer_shell::init_for_window(&window);
+    gtk_layer_shell::auto_exclusive_zone_enable(&window);
+    gtk_layer_shell::set_layer(&window, gtk_layer_shell::Layer::Top);
+    gtk_layer_shell::set_anchor(&window, gtk_layer_shell::Edge::Left, true);
+    gtk_layer_shell::set_anchor(&window, gtk_layer_shell::Edge::Bottom, true);
+    gtk_layer_shell::set_anchor(&window, gtk_layer_shell::Edge::Top, false);
+    gtk_layer_shell::set_anchor(&window, gtk_layer_shell::Edge::Right, false);
+    gtk_layer_shell::set_keyboard_interactivity(&window, false);
+    gtk_layer_shell::set_namespace(&window, "gtk-layer-shell");
+
+    let display = gtk::gdk::Display::default()
+        .expect("[ERROR] Could not get default display, is your compositor doing okay?");
+    let monitor = display
+        .monitor(0)
+        .expect("[ERROR] Could not find a valid monitor.");
+    gtk_layer_shell::set_monitor(&window, &monitor);
+
+    window.set_app_paintable(true);
+    window.set_size_request(49, 240);
 
     let menu_bar = MenuBar::new();
+    menu_bar.set_pack_direction(gtk::PackDirection::Btt);
     window.add(&menu_bar);
+
+    let css_provider = gtk::CssProvider::new();
+    let style = "menubar { background: rgba(0, 0, 0, 0); }";
+    css_provider.load_from_data(style.as_bytes()).expect("failed loading stylesheet");
+
+     gtk::StyleContext::add_provider_for_screen(
+        &gtk::gdk::Screen::default().expect("[ERROR] Couldn't find any valid displays!"),
+        &css_provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+
     let (sender, receiver) = mpsc::channel(32);
     let (cmd_tx, cmd_rx) = mpsc::channel(32);
 
@@ -153,8 +188,23 @@ fn build_ui(application: &gtk::Application) {
     window.show_all();
 }
 
+fn draw(_: &gtk::ApplicationWindow, ctx: &gtk::cairo::Context) -> Inhibit {
+    ctx.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+    ctx.set_operator(gtk::cairo::Operator::Screen);
+    ctx.paint().expect("[ERROR] Failed painting!");
+    Inhibit(false)
+}
+
+fn set_visual(window: &gtk::ApplicationWindow, screen: Option<&gtk::gdk::Screen>) {
+    if let Some(screen) = screen {
+        if let Some(ref visual) = screen.rgba_visual() {
+            window.set_visual(Some(visual)); // crucial for transparency
+        }
+    }
+}
+
 fn spawn_local_handler(
-    v_box: MenuBar,
+    v_box: gtk::MenuBar,
     mut receiver: mpsc::Receiver<NotifierItemMessage>,
     cmd_tx: mpsc::Sender<NotifierItemCommand>,
 ) {
@@ -186,6 +236,7 @@ fn spawn_local_handler(
 
                     let menu_item = MenuItem::new();
                     let menu_item_box = gtk::Box::default();
+                    menu_item_box.set_halign(gtk::Align::Center);
                     menu_item_box.add(&icon);
                     menu_item.add(&menu_item_box);
 
@@ -210,6 +261,8 @@ fn spawn_local_handler(
                         }
                     }
                     v_box.append(&menu_item);
+                } else {
+                    println!("Skip");
                 };
 
                 v_box.show_all();
