@@ -82,9 +82,10 @@ impl NotifierItem {
     }
 
     fn get_icon_from_pixmaps(&self, pixmaps: &Vec<IconPixmap>) -> Option<Image> {
-        let pixmap = pixmaps.iter().find(|pm|
-            pm.height > 20 && pm.height < 32
-        ).expect("No icon of suitable size found");
+        let pixmap = pixmaps
+            .iter()
+            .find(|pm| pm.height > 20 && pm.height < 32)
+            .expect("No icon of suitable size found");
 
         let pixbuf = gtk::gdk_pixbuf::Pixbuf::new(
             gtk::gdk_pixbuf::Colorspace::Rgb,
@@ -95,14 +96,25 @@ impl NotifierItem {
         )
         .expect("Failed to allocate pixbuf");
 
-        for y in 0..pixmap.height {
-            for x in 0..pixmap.width {
-                let index = (y * pixmap.width + x) * 4;
-                let a = pixmap.pixels[index as usize];
-                let r = pixmap.pixels[(index + 1) as usize];
-                let g = pixmap.pixels[(index + 2) as usize];
-                let b = pixmap.pixels[(index + 3) as usize];
-                pixbuf.put_pixel(x as u32, y as u32, r, g, b, a);
+        for (y, row) in (0..pixmap.height).zip(
+            pixmap
+                .pixels
+                .chunks_exact((pixmap.width * 4).try_into().expect("invalid pixmap width")),
+        ) {
+            for (x, pixel) in row.chunks_exact(4).enumerate() {
+                let (a, r, g, b) = if let [a, r, g, b] = pixel {
+                    (a, r, g, b)
+                } else {
+                    (&0, &0, &0, &0)
+                };
+                pixbuf.put_pixel(
+                    x.try_into().expect("x coordinate invalid"),
+                    y.try_into().expect("y coordinate invalid"),
+                    *r,
+                    *g,
+                    *b,
+                    *a,
+                );
             }
         }
 
@@ -172,9 +184,11 @@ fn build_ui(application: &gtk::Application) {
 
     let css_provider = gtk::CssProvider::new();
     let style = "menubar { background: rgba(0, 0, 0, 0); }";
-    css_provider.load_from_data(style.as_bytes()).expect("failed loading stylesheet");
+    css_provider
+        .load_from_data(style.as_bytes())
+        .expect("failed loading stylesheet");
 
-     gtk::StyleContext::add_provider_for_screen(
+    gtk::StyleContext::add_provider_for_screen(
         &gtk::gdk::Screen::default().expect("[ERROR] Couldn't find any valid displays!"),
         &css_provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
@@ -209,6 +223,8 @@ fn spawn_local_handler(
     cmd_tx: mpsc::Sender<NotifierItemCommand>,
 ) {
     let main_context = glib::MainContext::default();
+    let mut menu_items = std::collections::HashMap::new();
+
     let future = async move {
         while let Some(item) = receiver.recv().await {
             let mut state = STATE.lock().unwrap();
@@ -222,55 +238,108 @@ fn spawn_local_handler(
                     state.insert(id, NotifierItem { item: *item, menu });
                 }
                 NotifierItemMessage::Remove { address } => {
+                    if let Some(menu_item) = menu_items.get(&address) {
+                        v_box.remove(menu_item);
+                        menu_items.remove(&address);
+                    }
+
                     state.remove(&address);
                 }
             }
 
-            for child in v_box.children() {
-                v_box.remove(&child);
-            }
-
             for (address, notifier_item) in state.iter() {
                 if let Some(icon) = notifier_item.get_icon() {
-                    // Create the menu
-
-                    let menu_item = MenuItem::new();
-                    let menu_item_box = gtk::Box::default();
-                    menu_item_box.set_halign(gtk::Align::Center);
-                    menu_item_box.add(&icon);
-                    menu_item.add(&menu_item_box);
-
-                    if let Some(tray_menu) = &notifier_item.menu {
-                        let menu = Menu::new();
-                        tray_menu
-                            .submenus
-                            .iter()
-                            .map(|submenu| StatusNotifierWrapper {
-                                menu: submenu.to_owned(),
-                            })
-                            .map(|item| {
-                                let menu_path =
-                                    notifier_item.item.menu.as_ref().unwrap().to_string();
-                                let address = address.to_string();
-                                item.into_menu_item(cmd_tx.clone(), address, menu_path)
-                            })
-                            .for_each(|item| menu.append(&item));
-
-                        if !tray_menu.submenus.is_empty() {
-                            menu_item.set_submenu(Some(&menu));
-                        }
+                    if !menu_items.contains_key(address) {
+                        let menu_item =
+                            create_menu_item(&v_box, notifier_item, address, icon, &cmd_tx);
+                        menu_items.insert(address.to_string(), menu_item);
+                    } else {
+                        let menu_item = menu_items.get(address).unwrap();
+                        update_menu_item(menu_item, notifier_item, address, icon, &cmd_tx);
                     }
-                    v_box.append(&menu_item);
-                } else {
-                    println!("Skip");
-                };
-
-                v_box.show_all();
+                }
             }
+
+            v_box.show_all();
         }
     };
 
     main_context.spawn_local(future);
+}
+
+fn create_menu_item(
+    v_box: &gtk::MenuBar,
+    notifier_item: &NotifierItem,
+    address: &String,
+    icon: gtk::Image,
+    cmd_tx: &mpsc::Sender<NotifierItemCommand>,
+) -> gtk::MenuItem {
+    let menu_item = MenuItem::new();
+    let menu_item_box = gtk::Box::default();
+    menu_item_box.set_halign(gtk::Align::Center);
+    menu_item_box.add(&icon);
+    menu_item.add(&menu_item_box);
+
+    if let Some(tray_menu) = &notifier_item.menu {
+        let menu = Menu::new();
+        tray_menu
+            .submenus
+            .iter()
+            .map(|submenu| StatusNotifierWrapper {
+                menu: submenu.to_owned(),
+            })
+            .map(|item| {
+                let menu_path = notifier_item.item.menu.as_ref().unwrap().to_string();
+                let address = address.to_string();
+                item.into_menu_item(cmd_tx.clone(), address, menu_path)
+            })
+            .for_each(|item| menu.append(&item));
+
+        if !tray_menu.submenus.is_empty() {
+            menu_item.set_submenu(Some(&menu));
+        }
+    }
+    v_box.append(&menu_item);
+    menu_item
+}
+
+fn update_menu_item(
+    menu_item: &gtk::MenuItem,
+    notifier_item: &NotifierItem,
+    address: &String,
+    icon: gtk::Image,
+    cmd_tx: &mpsc::Sender<NotifierItemCommand>,
+) {
+    let children = menu_item.children();
+    let menu_item_box = children[0].downcast_ref::<gtk::Box>().unwrap();
+    let icons = menu_item_box.children();
+    let existing_icon = icons[0].downcast_ref::<gtk::Image>().unwrap();
+    existing_icon.set_from_pixbuf(icon.pixbuf().as_ref());
+
+    if let Some(tray_menu) = &notifier_item.menu {
+        let sub_menu = menu_item
+            .submenu()
+            .unwrap()
+            .downcast::<gtk::Container>()
+            .unwrap();
+        sub_menu.foreach(|child| sub_menu.remove(child));
+        tray_menu
+            .submenus
+            .iter()
+            .map(|submenu| StatusNotifierWrapper {
+                menu: submenu.to_owned(),
+            })
+            .map(|item| {
+                let menu_path = notifier_item.item.menu.as_ref().unwrap().to_string();
+                item.into_menu_item(cmd_tx.clone(), address.to_string(), menu_path)
+            })
+            .for_each(|item| {
+                sub_menu
+                    .downcast_ref::<gtk::MenuShell>()
+                    .unwrap()
+                    .append(&item);
+            });
+    }
 }
 
 fn start_communication_thread(
