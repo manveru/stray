@@ -31,7 +31,6 @@ impl StatusNotifierWatcher {
         {
             let tx = tx.clone();
             tokio::spawn(async move {
-                tracing::info!("Starting notifier watcher");
                 start_notifier_watcher(tx)
                     .await
                     .expect("Unexpected StatusNotifierError ");
@@ -159,8 +158,6 @@ async fn status_notifier_handle(
         .registered_status_notifier_items()
         .await?;
 
-    tracing::info!("Got {} notifier items", notifier_items.len());
-
     // Start watching for all registered notifier items
     for service in notifier_items.iter() {
         let service = NotifierAddress::from_notifier_service(service);
@@ -179,10 +176,6 @@ async fn status_notifier_handle(
     while let Some(notifier) = new_notifier.next().await {
         let args = notifier.args()?;
         let service: &str = args.service();
-        tracing::info!(
-            "StatusNotifierItemRegistered signal received service={}",
-            service
-        );
 
         let service = NotifierAddress::from_notifier_service(service);
         if let Ok(notifier_address) = service {
@@ -272,8 +265,6 @@ async fn fetch_properties_and_update(
             .await
             .ok(),
         };
-
-        tracing::info!("StatusNotifierItem updated, dbus-address={item_address}");
 
         sender
             .send(NotifierItemMessage::Update {

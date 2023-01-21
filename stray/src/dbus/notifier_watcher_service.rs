@@ -58,7 +58,6 @@ impl DbusNotifierWatcher {
         service: &str,
         #[zbus(signal_context)] ctxt: SignalContext<'_>,
     ) {
-        tracing::info!("StatusNotifierHost registered: '{}'", service);
         self.status_notifier_hosts.insert(service.to_string());
         self.is_status_notifier_host_registered = true;
         self.is_status_notifier_host_registered_changed(&ctxt)
@@ -82,8 +81,6 @@ impl DbusNotifierWatcher {
 
         self.registered_status_notifier_items
             .insert(notifier_item.clone());
-
-        tracing::info!("StatusNotifierItem registered: '{}'", notifier_item);
 
         Self::status_notifier_item_registered(&ctxt, &notifier_item)
             .await
